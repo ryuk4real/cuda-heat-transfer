@@ -1,6 +1,6 @@
 #pragma once
 
-#include "kernel.h"
+#include "kernel.cuh"
 
 void updateRegion(double* next, double* curr, 
                   unsigned int nRows, 

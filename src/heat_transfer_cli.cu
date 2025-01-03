@@ -1,47 +1,44 @@
-#include "init.h"
-#include "io.h"
-#include "update.h"
-#include "util.h"
+#include "init.hpp"
+#include "io.hpp"
+#include "update.hpp"
+#include "util.hpp"
 #include <iostream>
 
 int main()
 {
     unsigned int step = 0;
-    unsigned int nSteps {10000};
-    unsigned int gridRows {1 << 8};
-    unsigned int gridCols {1 << 12};
-    unsigned int nHotTopRows {2};
-    unsigned int nHotBottomRows {2};
-    double initialHotTemperature {20};
-    double * temperatureCurrent = new (std::nothrow) double[gridRows*gridCols];
-    double * temperatureNext = new (std::nothrow) double[gridRows*gridCols];
-    double elapsedTime {0.0};
-    unsigned int fieldWidth {5};
-    std::string outfilePrefix {"temperature"};
-    std::string outfileExtension {".dat"};
+    unsigned int n_steps {10000};
+    unsigned int grid_rows {1 << 8};
+    unsigned int grid_cols {1 << 12};
+    unsigned int n_hot_top_rows {2};
+    unsigned int n_hot_bottom_rows {2};
+    double initial_hot_temperature {20};
+    double * temperature_current = new (std::nothrow) double[grid_rows*grid_cols];
+    double * temperature_next = new (std::nothrow) double[grid_rows*grid_cols];
+    double elapsed_time {0.0};
+    unsigned int field_width {5};
+    std::string outfile_prefix {"temperature"};
+    std::string outfile_extension {".dat"};
  
-    initTopBottomTemperature(temperatureCurrent, gridRows, gridCols, nHotTopRows, nHotBottomRows, initialHotTemperature);
-    initTopBottomTemperature(temperatureNext, gridRows, gridCols, nHotTopRows, nHotBottomRows, initialHotTemperature);
+    initTopBottomTemperature(temperature_current, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, initial_hot_temperature);
+    initTopBottomTemperature(temperature_next, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, initial_hot_temperature);
 
     std::cout << "Saving initial configuration... " << std::endl;
-    saveTemparature(outfilePrefix, outfileExtension, step, temperatureCurrent, gridRows, gridCols, fieldWidth);
+    saveTemparature(outfile_prefix, outfile_extension, step, temperature_current, grid_rows, grid_cols, field_width);
     std::cout << "Done" << std::endl;
 
     std::cout << "Simulation in progress... " << std::endl;
     util::Timer clTimer;
-    for (step = 1; step <= nSteps; step++) {
-        updateRegion(temperatureNext, temperatureCurrent,
-                     gridRows, gridCols,
-                     nHotTopRows, (gridRows-1)-nHotBottomRows,
-                     1, (gridCols-1)-1);
-        
-        swapBufferPtrs(temperatureNext, temperatureCurrent);    
+    
+    for (step = 1; step <= n_steps; step++) {
+        updateRegion(temperature_next, temperature_current, grid_rows, grid_cols, n_hot_top_rows, (grid_rows-1)-n_hot_bottom_rows, 1, (grid_cols-1)-1);
+        swapBufferPtrs(temperature_next, temperature_current);    
     }
-    elapsedTime = static_cast<double>(clTimer.getTimeMilliseconds());
-    std::cout << "Simulation loop elapsed time: " << elapsedTime << " ms (corresponding to " << (elapsedTime / 1000.0) << " s)" << std::endl;
+    elapsed_time = static_cast<double>(clTimer.getTimeMilliseconds());
+    std::cout << "Simulation loop elapsed time: " << elapsed_time << " ms (corresponding to " << (elapsed_time / 1000.0) << " s)" << std::endl;
 
     std::cout << "Saving final configuration... " << std::endl;
-    saveTemparature(outfilePrefix, outfileExtension, --step, temperatureCurrent, gridRows, gridCols, fieldWidth); 
+    saveTemparature(outfile_prefix, outfile_extension, --step, temperature_current, grid_rows, grid_cols, field_width); 
     std::cout << "Done" << std::endl;
 
     /*
@@ -53,6 +50,6 @@ int main()
      *
      */
 
-    delete[] temperatureCurrent, temperatureNext;
+    delete[] temperature_current, temperature_next;
     return 0;
 }
