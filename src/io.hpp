@@ -21,7 +21,7 @@ void printTemperature(unsigned int step, double* gridTemperature, unsigned int n
     streamTemperature(std::cout, step, gridTemperature, nRows, nCols, fieldW);
 }
 
-void saveTemparature(std::string file_base_name, std::string file_extension, unsigned int step, double* gridTemperature, unsigned int nRows, unsigned int nCols, unsigned int fieldW)
+void save_temperature(std::string file_base_name, std::string file_extension, unsigned int step, double* gridTemperature, unsigned int nRows, unsigned int nCols, unsigned int fieldW)
 {
     std::string filename = file_base_name + "_step_" + std::to_string(step) + file_extension;
     std::fstream file(filename, std::ios::out);

@@ -2,9 +2,9 @@
 
 #include "kernel.cuh"
 
-void updateRegion(double* next, double* curr, 
-                  unsigned int nRows, 
-                  unsigned int nCols, 
+void update_region(double* next, double* curr, 
+                  unsigned int n_rows, 
+                  unsigned int n_cols, 
                   unsigned int i_start, 
                   unsigned int i_end,
                   unsigned int j_start, 
@@ -12,12 +12,12 @@ void updateRegion(double* next, double* curr,
 {
     for (unsigned int i = i_start; i <= i_end; i++)
             for (unsigned int j = j_start; j <= j_end; j++)
-                updateTemperatureKernel(next, curr, i, j, nCols);
+                update_temperature_kernel(next, curr, i, j, n_cols);
 }
 
-void swapBufferPtrs(double*& next, double*& curr)
+void swap_buffer_ptrs(double*& next, double*& curr)
 {
-    double* tempPtr = next;
+    double* temp_ptr = next;
     next = curr;
-    curr = tempPtr;
+    curr = temp_ptr;
 }
