@@ -15,10 +15,8 @@ inline void cudaAssert(cudaError_t code, const char *file, int line)
 }
 
 void serial(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
-void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, 
-                           unsigned int grid_cols, unsigned int n_hot_top_rows, 
-                           unsigned int n_hot_bottom_rows, double* temperature_current, 
-                           double* temperature_next);
+void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
+void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
 
 int main()
 {
@@ -55,8 +53,10 @@ int main()
     }
 
     //serial(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
-    straightforward_unified(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
-    
+    //straightforward_unified(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
+    straightforward_standard(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
+
+
     elapsed_time = static_cast<double>(clTimer.getTimeMilliseconds());
     std::cout << "Simulation loop elapsed time: " << elapsed_time << " ms (corresponding to " << (elapsed_time / 1000.0) << " s)" << std::endl;
 
@@ -110,7 +110,8 @@ void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsig
         (grid_rows + block_dim.y - 1) / block_dim.y
     );
 
-    for (unsigned int step = 1; step <= n_steps; step++) {
+    for (unsigned int step = 1; step <= n_steps; step++)
+    {
         straightforward_unified_kernel<<<grid_dim, block_dim>>>( d_temp_next, d_temp_current, grid_rows, grid_cols, n_hot_top_rows, (grid_rows-1)-n_hot_bottom_rows, 1, (grid_cols-1)-1);
         
         // Check for any errors launching the kernel
@@ -124,6 +125,45 @@ void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsig
 
     memcpy(temperature_current, d_temp_current, grid_rows * grid_cols * sizeof(double));
     memcpy(temperature_next, d_temp_next, grid_rows * grid_cols * sizeof(double));
+
+    cudaCheckError(cudaFree(d_temp_current));
+    cudaCheckError(cudaFree(d_temp_next));
+}
+
+
+void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next)
+{
+    /**
+        This function uses standard device / host memory management.
+    */
+
+    double *d_temp_current, *d_temp_next;
+
+    cudaCheckError(cudaMalloc(&d_temp_current, grid_rows * grid_cols * sizeof(double)));
+    cudaCheckError(cudaMalloc(&d_temp_next, grid_rows * grid_cols * sizeof(double)));
+
+    cudaCheckError(cudaMemcpy(d_temp_current, temperature_current, grid_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMemcpy(d_temp_next, temperature_next, grid_rows * grid_cols * sizeof(double),  cudaMemcpyHostToDevice));
+
+    dim3 block_dim(16, 8);
+    dim3 grid_dim(
+        (grid_cols + block_dim.x - 1) / block_dim.x,
+        (grid_rows + block_dim.y - 1) / block_dim.y
+    );
+
+    for (unsigned int step = 1; step <= n_steps; step++)
+    {
+        straightforward_unified_kernel<<<grid_dim, block_dim>>>(d_temp_next, d_temp_current, grid_rows, grid_cols, n_hot_top_rows, (grid_rows-1)-n_hot_bottom_rows, 1, (grid_cols-1)-1);
+        
+        cudaCheckError(cudaGetLastError());
+        cudaCheckError(cudaDeviceSynchronize());
+
+        swap_buffer_ptrs(d_temp_next, d_temp_current);
+    }
+
+    // Copy final results back to host
+    cudaCheckError(cudaMemcpy(temperature_current, d_temp_current, grid_rows * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
+    cudaCheckError(cudaMemcpy(temperature_next, d_temp_next, grid_rows * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
 
     cudaCheckError(cudaFree(d_temp_current));
     cudaCheckError(cudaFree(d_temp_next));

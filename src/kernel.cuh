@@ -1,4 +1,5 @@
 #pragma once
+#include <cuda_runtime.h>
 
 void update_temperature_kernel(double* t_next, double* t, unsigned int i, unsigned int j, unsigned int n_cols)
 {
@@ -15,7 +16,7 @@ void update_temperature_kernel(double* t_next, double* t, unsigned int i, unsign
                           );
 }
 
-#include <cuda_runtime.h>
+
 
 __global__ void straightforward_unified_kernel(double* t_next, double* t, unsigned int n_rows, unsigned int n_cols, unsigned int i_start, unsigned int i_end, unsigned int j_start, unsigned int j_end) 
 {
