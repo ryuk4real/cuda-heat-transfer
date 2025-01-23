@@ -4,6 +4,8 @@
 #include "util.hpp"
 #include <iostream>
 
+#define CONFIGURATIONS_STRING "1=straighforward unified, 2=straighforward standard"
+
 #define cudaCheckError(ans) { cudaAssert((ans), __FILE__, __LINE__); }
 inline void cudaAssert(cudaError_t code, const char *file, int line)
 {
@@ -15,11 +17,61 @@ inline void cudaAssert(cudaError_t code, const char *file, int line)
 }
 
 void serial(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
-void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
-void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next);
+void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
+void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 
-int main()
+void print_usage(const char* program_name);
+
+int main(int argc, char *argv[])
 {
+
+    unsigned int configuration;
+    unsigned int block_dim_x;
+    unsigned int block_dim_y;
+
+    --argc;
+
+    if(argc == 0)
+    {
+        configuration = 0;
+    }
+    else if(argc == 1)
+    {
+        if(strncmp(argv[1], "-h", 2) == 0 || strncmp(argv[1], "--help", 6) == 0)
+        {
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+    else if(argc == 3 && strncmp(argv[3], "--conf=", 7) == 0)
+    {
+        block_dim_x = std::stoi(argv[1]);
+        block_dim_y = std::stoi(argv[2]);
+
+        if(block_dim_x == 0 || block_dim_y == 0)
+        {
+            std::cerr << "Invalid block dimensions" << std::endl;
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        if(strncmp(argv[3], "--conf=", 7) != 0)
+        {
+            std::cerr << "Invalid configuration" << std::endl;
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        configuration = std::stoi(argv[3] + 7);
+
+        if(configuration == 0)
+        {
+            std::cerr << "Invalid configuration" << std::endl;
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
     unsigned int step = 0;
     unsigned int n_steps {10000};
     unsigned int grid_rows {1 << 8};
@@ -37,6 +89,16 @@ int main()
     init_top_bottom_temperature(temperature_current, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, initial_hot_temperature);
     init_top_bottom_temperature(temperature_next, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, initial_hot_temperature);
 
+    std::cout << "Grid size: " << grid_rows << " x " << grid_cols << std::endl;
+    std::cout << "Number of steps: " << n_steps << std::endl;
+
+    if (configuration != 0)
+    {
+        std::cout << "Block dimensions: " << block_dim_x << " x " << block_dim_y << std::endl;
+    }
+
+    std::cout << "Configuration: " << configuration << std::endl;
+
     std::cout << "Saving initial configuration... " << std::endl;
     save_temperature(outfile_prefix, outfile_extension, step, temperature_current, grid_rows, grid_cols, field_width);
     std::cout << "Done" << std::endl;
@@ -47,15 +109,21 @@ int main()
     // Check for CUDA devices
     int device_count;
     cudaCheckError(cudaGetDeviceCount(&device_count));
-    if (device_count == 0) {
-        std::cerr << "No CUDA devices found" << std::endl;
-        return 1;
+
+    dim3 block_dim(block_dim_x, block_dim_y);
+
+    // Execute selected configuration
+    switch (configuration) {
+        case 0:
+            serial(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
+            break;
+        case 1:
+            straightforward_unified(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
+            break;
+        case 2:
+            straightforward_standard(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
+            break;
     }
-
-    //serial(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
-    //straightforward_unified(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
-    straightforward_standard(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next);
-
 
     elapsed_time = static_cast<double>(clTimer.getTimeMilliseconds());
     std::cout << "Simulation loop elapsed time: " << elapsed_time << " ms (corresponding to " << (elapsed_time / 1000.0) << " s)" << std::endl;
@@ -87,7 +155,7 @@ void serial(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols
     }
 }
 
-void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next)
+void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim)
 {
     /** 
         This function uses automatic unified memory management, which allows the CPU and GPU to access the same memory
@@ -103,8 +171,6 @@ void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsig
     memcpy(d_temp_current, temperature_current, grid_rows * grid_cols * sizeof(double));
     memcpy(d_temp_next, temperature_next, grid_rows * grid_cols * sizeof(double));
 
-    //TODO: Define block and grid dimensions as input parameters
-    dim3 block_dim(16, 8);
     dim3 grid_dim(
         (grid_cols + block_dim.x - 1) / block_dim.x,
         (grid_rows + block_dim.y - 1) / block_dim.y
@@ -131,7 +197,7 @@ void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsig
 }
 
 
-void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next)
+void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim)
 {
     /**
         This function uses standard device / host memory management.
@@ -145,7 +211,6 @@ void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsi
     cudaCheckError(cudaMemcpy(d_temp_current, temperature_current, grid_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
     cudaCheckError(cudaMemcpy(d_temp_next, temperature_next, grid_rows * grid_cols * sizeof(double),  cudaMemcpyHostToDevice));
 
-    dim3 block_dim(16, 8);
     dim3 grid_dim(
         (grid_cols + block_dim.x - 1) / block_dim.x,
         (grid_rows + block_dim.y - 1) / block_dim.y
@@ -167,4 +232,15 @@ void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsi
 
     cudaCheckError(cudaFree(d_temp_current));
     cudaCheckError(cudaFree(d_temp_next));
+}
+
+void print_usage(const char* program_name)
+{
+    std::cout << "Usage: " << program_name << " [block_dim_x] [block_dim_y] [--conf=N]\n"
+            << "Options:\n"
+            << "  block_dim_x     Block dimension x\n"
+            << "  block_dim_y     Block dimension y\n"
+            << "  --conf=N        Configuration to use ("<< CONFIGURATIONS_STRING <<")\n"
+            << "  -h, --help      Display this help message\n"
+            << "To run the program with serial (0) configuration, do not provide any arguments\n";
 }
