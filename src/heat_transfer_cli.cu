@@ -20,6 +20,7 @@ void serial(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols
 void straightforward_unified(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void tiled_no_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
+void tiled_with_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 
 void print_usage(const char* program_name);
 
@@ -126,6 +127,9 @@ int main(int argc, char *argv[])
             break;
         case 3:
             tiled_no_halos(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
+            break;
+        case 4:
+            tiled_with_halos(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
             break;
     }
 
@@ -240,7 +244,8 @@ void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsi
 void tiled_no_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim)
 {
     /**
-        This function uses standard device / host memory management.
+        This function uses standard device / host memory management. The kernel uses shared memory to store the tile so that
+        the global memory accesses are reduced.
     */
 
     if(block_dim.x < 16 || block_dim.y < 16)
@@ -265,6 +270,50 @@ void tiled_no_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int g
     for (unsigned int step = 1; step <= n_steps; step++)
     {
         tiled_no_halos_kernel<<<grid_dim, block_dim>>>(d_temp_next, d_temp_current, grid_rows, grid_cols, n_hot_top_rows, (grid_rows-1)-n_hot_bottom_rows, 1, (grid_cols-1)-1);
+        
+        cudaCheckError(cudaGetLastError());
+        cudaCheckError(cudaDeviceSynchronize());
+
+        swap_buffer_ptrs(d_temp_next, d_temp_current);
+    }
+
+    // Copy final results back to host
+    cudaCheckError(cudaMemcpy(temperature_current, d_temp_current, grid_rows * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
+    cudaCheckError(cudaMemcpy(temperature_next, d_temp_next, grid_rows * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
+
+    cudaCheckError(cudaFree(d_temp_current));
+    cudaCheckError(cudaFree(d_temp_next));
+}
+
+void tiled_with_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim)
+{
+    /**
+        This function uses standard device / host memory management. The kernel uses shared memory to store the tile from neighboring
+        and also the halo elements so that the global memory accesses are reduced. 
+    */
+
+    if(block_dim.x < 16 || block_dim.y < 16)
+    {
+        std::cerr << "Block dimensions must be at least 16 x 16" << std::endl;
+        return;
+    }
+
+    double *d_temp_current, *d_temp_next;
+
+    cudaCheckError(cudaMalloc(&d_temp_current, grid_rows * grid_cols * sizeof(double)));
+    cudaCheckError(cudaMalloc(&d_temp_next, grid_rows * grid_cols * sizeof(double)));
+
+    cudaCheckError(cudaMemcpy(d_temp_current, temperature_current, grid_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMemcpy(d_temp_next, temperature_next, grid_rows * grid_cols * sizeof(double),  cudaMemcpyHostToDevice));
+
+    dim3 grid_dim(
+        (grid_cols + block_dim.x - 1) / block_dim.x,
+        (grid_rows + block_dim.y - 1) / block_dim.y
+    );
+
+    for (unsigned int step = 1; step <= n_steps; step++)
+    {
+        tiled_with_halos_kernel<<<grid_dim, block_dim>>>(d_temp_next, d_temp_current, grid_rows, grid_cols, n_hot_top_rows, (grid_rows-1)-n_hot_bottom_rows, 1, (grid_cols-1)-1);
         
         cudaCheckError(cudaGetLastError());
         cudaCheckError(cudaDeviceSynchronize());
