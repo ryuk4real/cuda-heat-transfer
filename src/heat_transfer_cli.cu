@@ -5,7 +5,7 @@
 #include <iostream>
 #include <mpi.h>
 
-#define CONFIGURATIONS_STRING "1=straighforward unified, 2=straighforward standard, 3=tiled no halos, 4=tiled with halos, 5=tiled with halos larger block"
+#define CONFIGURATIONS_STRING "\n\t\t\t1=straighforward unified,\n\t\t\t2=straighforward standard,\n\t\t\t3=tiled no halos,\n\t\t\t4=tiled with halos,\n\t\t\t5=tiled with halos larger block size,\n\t\t\t6=tiled with larger block size and MPI"
 
 #define cudaCheckError(ans) { cudaAssert((ans), __FILE__, __LINE__); }
 inline void cudaAssert(cudaError_t code, const char *file, int line)
@@ -23,7 +23,7 @@ void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsi
 void tiled_no_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void tiled_with_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void tiled_with_halos_larger_block(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
-void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim, int rank, int size);
+void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void print_usage(const char* program_name);
 
 int main(int argc, char *argv[])
@@ -137,7 +137,7 @@ int main(int argc, char *argv[])
             tiled_with_halos_larger_block(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
             break;
         case 6:
-            tiled_with_larger_block_MPI(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim, rank, size);
+            tiled_with_larger_block_MPI(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
             break;
     }
 
@@ -369,7 +369,7 @@ void tiled_with_halos_larger_block(unsigned int n_steps, unsigned int grid_rows,
     cudaCheckError(cudaFree(d_temp_next));
 }
 
-void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim, int rank, int size)
+void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim)
 {
     /**
         This function uses standard device / host memory management but the computation is distributed among MPI processes so that
