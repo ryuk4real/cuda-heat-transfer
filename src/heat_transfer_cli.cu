@@ -3,6 +3,7 @@
 #include "update.hpp"
 #include "util.hpp"
 #include <iostream>
+#include <mpi.h>
 
 #define CONFIGURATIONS_STRING "1=straighforward unified, 2=straighforward standard, 3=tiled no halos, 4=tiled with halos, 5=tiled with halos larger block"
 
@@ -22,7 +23,7 @@ void straightforward_standard(unsigned int n_steps, unsigned int grid_rows, unsi
 void tiled_no_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void tiled_with_halos(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
 void tiled_with_halos_larger_block(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim);
-
+void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim, int rank, int size);
 void print_usage(const char* program_name);
 
 int main(int argc, char *argv[])
@@ -134,6 +135,9 @@ int main(int argc, char *argv[])
             break;
         case 5:
             tiled_with_halos_larger_block(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim);
+            break;
+        case 6:
+            tiled_with_larger_block_MPI(n_steps, grid_rows, grid_cols, n_hot_top_rows, n_hot_bottom_rows, temperature_current, temperature_next, block_dim, rank, size);
             break;
     }
 
@@ -329,7 +333,7 @@ void tiled_with_halos_larger_block(unsigned int n_steps, unsigned int grid_rows,
 {
     /**
         This function uses standard device / host memory management. The kernel uses shared memory to store the tile from neighboring
-        and also the halo elements so that the global memory accesses are reduced. The block dimensions are increased to 32 x 32.
+        and also the halo elements so that the global memory accesses are reduced.
     */
 
     double *d_temp_current, *d_temp_next;
@@ -364,6 +368,126 @@ void tiled_with_halos_larger_block(unsigned int n_steps, unsigned int grid_rows,
     cudaCheckError(cudaFree(d_temp_current));
     cudaCheckError(cudaFree(d_temp_next));
 }
+
+void tiled_with_larger_block_MPI(unsigned int n_steps, unsigned int grid_rows, unsigned int grid_cols, unsigned int n_hot_top_rows, unsigned int n_hot_bottom_rows, double* temperature_current, double* temperature_next, dim3 block_dim, int rank, int size)
+{
+    /**
+        This function uses standard device / host memory management but the computation is distributed among MPI processes so that
+        each process computes a part of the grid on two different GPUs. The kernel uses shared memory to store the tile from neighboring
+        and also the halo elements so that the global memory accesses are reduced.
+
+        It is supposed to be run on a machine with 2 GPUs.
+    */
+
+    int rank;
+    int size;
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    // Verify we have exactly 2 GPUs and 2 processes
+    int device_count;
+    cudaCheckError(cudaGetDeviceCount(&device_count));
+    if (device_count != 2 || size != 2) {
+        if (rank == 0) {
+            std::cerr << "This implementation requires exactly 2 GPUs and 2 MPI processes\n";
+        }
+        MPI_Finalize();
+        exit(1);
+    }
+
+    // Each process takes half of the grid avoiding the hot rows, the first and last two rows
+    int rows_per_process = (grid_rows - n_hot_top_rows - n_hot_bottom_rows) / 2;
+    int local_rows = rows_per_process + 2; // +2 for halo rows
+    
+    // Each process here allocates a local buffer
+    double* local_current = new double[local_rows * grid_cols];
+    double* local_next = new double[local_rows * grid_cols];
+    
+    // Each process uses its own GPU
+    cudaCheckError(cudaSetDevice(rank));
+    double *d_temp_current, *d_temp_next;
+
+    // Each process allocates memory on its own GPU
+    cudaCheckError(cudaMalloc(&d_temp_current, local_rows * grid_cols * sizeof(double)));
+    cudaCheckError(cudaMalloc(&d_temp_next, local_rows * grid_cols * sizeof(double)));
+
+    // Starting row for current process
+    int start_row = n_hot_top_rows + (rank * rows_per_process);
+    
+    // Initial distribution of data
+    if (rank == 0) {
+        // First half - including hot top rows
+        memcpy(local_current, temperature_current + start_row * grid_cols, (rows_per_process + 1) * grid_cols * sizeof(double));
+    } else {
+        // Second half - including hot bottom rows
+        memcpy(local_current + grid_cols, temperature_current + (start_row - 1) * grid_cols,(rows_per_process + 1) * grid_cols * sizeof(double));
+    }
+    
+    // Copy initial data to GPU
+    cudaCheckError(cudaMemcpy(d_temp_current, local_current, local_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMemcpy(d_temp_next, local_next, local_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
+
+    // Calculate grid dimensions for kernel
+    dim3 grid_dim((grid_cols + block_dim.x - 1) / block_dim.x,
+                  (local_rows + block_dim.y - 1) / block_dim.y);
+    
+    // Shared memory size calculation
+    size_t shared_mem_size = (block_dim.x + 2) * (block_dim.y + 2) * sizeof(double) * 2;
+
+    MPI_Request send_request, recv_request;
+    
+    // Exchange halos between the two processes
+    for (unsigned int step = 1; step <= n_steps; step++) {
+        if (rank == 0) {
+            // Send bottom row to process 1 and receive top halo from process 1
+            MPI_Isend(local_current + (rows_per_process * grid_cols), grid_cols, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, &send_request);
+            MPI_Irecv(local_current + ((rows_per_process + 1) * grid_cols), grid_cols, MPI_DOUBLE, 1, 1, MPI_COMM_WORLD, &recv_request);
+        } else {
+            // Send top row to process 0 and receive bottom halo from process 0
+            MPI_Isend(local_current + grid_cols, grid_cols, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, &send_request);
+            MPI_Irecv(local_current, grid_cols, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &recv_request);
+        }
+
+        // Wait for halo exchanges to complete
+        MPI_Wait(&send_request, MPI_STATUS_IGNORE);
+        MPI_Wait(&recv_request, MPI_STATUS_IGNORE);
+
+        // Update GPU memory with new halos
+        cudaCheckError(cudaMemcpy(d_temp_current, local_current, local_rows * grid_cols * sizeof(double), cudaMemcpyHostToDevice));
+
+        // Launch kernel
+        tiled_with_halos_larger_block_kernel<<<grid_dim, block_dim, shared_mem_size>>>(d_temp_next, d_temp_current, local_rows, grid_cols, 1, local_rows - 2, 1, grid_cols - 2);
+        
+        cudaCheckError(cudaGetLastError());
+        cudaCheckError(cudaDeviceSynchronize());
+
+        // Swap pointers on device and host
+        swap_buffer_ptrs(d_temp_next, d_temp_current);
+        swap_buffer_ptrs(local_next, local_current);
+    }
+
+    // Everything is gathered on process 0
+    if (rank == 0) {
+        // Copy local results back
+        cudaCheckError(cudaMemcpy(temperature_current + start_row * grid_cols, d_temp_current + grid_cols, rows_per_process * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
+        
+        // Receive results from process 1
+        MPI_Recv(temperature_current + (start_row + rows_per_process) * grid_cols, rows_per_process * grid_cols, MPI_DOUBLE, 1, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    } else {
+        // Send local results back to process 0
+        cudaCheckError(cudaMemcpy(local_current, d_temp_current + grid_cols, rows_per_process * grid_cols * sizeof(double), cudaMemcpyDeviceToHost));
+        MPI_Send(local_current, rows_per_process * grid_cols, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
+    }
+
+    cudaCheckError(cudaFree(d_temp_current));
+    cudaCheckError(cudaFree(d_temp_next));
+    delete[] local_current;
+    delete[] local_next;
+
+    MPI_Finalize();
+}
+
 
 void print_usage(const char* program_name)
 {
